@@ -1,4 +1,4 @@
-export type ShiftCode = 'PAGI' | 'SIANG' | 'MALAM' | 'LIBUR';
+export type ShiftCode = 'TENSI' | 'IGD' | 'POLI' | 'LAPANGAN' | 'LIBUR';
 
 export interface ShiftDefinition {
   code: ShiftCode;
@@ -24,6 +24,8 @@ export interface DayAssignment {
 
 export interface StaffWeeklyRow {
   staff: StaffMember;
+  inBuildingCount: number; // Total hari jaga Tensi/IGD/Poli (maks. 3 hari)
+  lapanganCount: number;   // Total hari tugas Lapangan
   days: DayAssignment[];
 }
 

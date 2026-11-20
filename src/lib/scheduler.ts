@@ -7,49 +7,46 @@ import {
   WeeklyRoster,
 } from '@/types/schedule';
 
+export const MAX_IN_BUILDING_DAYS = 3;
+
+export const IN_BUILDING_UNITS: Exclude<ShiftCode, 'LAPANGAN' | 'LIBUR'>[] = [
+  'TENSI',
+  'IGD',
+  'POLI',
+];
+
 export const SHIFT_DEFINITIONS: Record<ShiftCode, ShiftDefinition> = {
-  PAGI: {
-    code: 'PAGI',
+  TENSI: {
+    code: 'TENSI',
+    label: 'Tensi',
+    timeRange: 'Ruang Tensi',
+    badgeClass: 'bg-sky-100 text-sky-800 border-sky-300',
+  },
+  IGD: {
+    code: 'IGD',
     label: 'IGD',
-    timeRange: '07:45 - 14.15',
+    timeRange: 'Ruang IGD',
+    badgeClass: 'bg-rose-100 text-rose-800 border-rose-300',
+  },
+  POLI: {
+    code: 'POLI',
+    label: 'Poli',
+    timeRange: 'Poli Umum',
     badgeClass: 'bg-emerald-100 text-emerald-800 border-emerald-300',
   },
-  SIANG: {
-    code: 'SIANG',
-    label: 'Tensi',
-    timeRange: '07:45 - 14.15',
+  LAPANGAN: {
+    code: 'LAPANGAN',
+    label: 'Lapangan',
+    timeRange: 'Tugas Lapangan',
     badgeClass: 'bg-amber-100 text-amber-800 border-amber-300',
-  },
-  MALAM: {
-    code: 'MALAM',
-    label: 'Poli Umum',
-    timeRange: '07:45 - 14.15',
-    badgeClass: 'bg-indigo-100 text-indigo-800 border-indigo-300',
   },
   LIBUR: {
     code: 'LIBUR',
     label: 'Libur',
-    timeRange: 'Nice day',
+    timeRange: 'Off Duty',
     badgeClass: 'bg-slate-100 text-slate-500 border-slate-300',
   },
 };
-
-/**
- * Pola rotasi 2 blok per minggu (masing-masing 3 hari):
- * [Senin-Rabu (3 hari), Kamis-Sabtu (3 hari)]
- * Dirancang agar:
- * 1. Tidak pernah lebih dari 3 hari di sesi shift yang sama (termasuk lintas minggu).
- * 2. Distribusi Pagi/Siang/Malam selalu seimbang setiap hari Senin-Sabtu.
- * 3. Jeda istirahat antar pergantian shift aman (minimal 8-32 jam).
- */
-const SHIFT_BLOCK_PATTERNS: [
-  Exclude<ShiftCode, 'LIBUR'>,
-  Exclude<ShiftCode, 'LIBUR'>
-][] = [
-  ['PAGI', 'MALAM'],  // Pola 1: Sen-Rab Pagi, Kam-Sab Malam
-  ['SIANG', 'PAGI'],  // Pola 2: Sen-Rab Siang, Kam-Sab Pagi
-  ['MALAM', 'SIANG'], // Pola 3: Sen-Rab Malam, Kam-Sab Siang
-];
 
 const DAY_NAMES_ID = [
   'Senin',
@@ -60,6 +57,34 @@ const DAY_NAMES_ID = [
   'Sabtu',
   'Minggu',
 ];
+
+/**
+ * Pembagian jadwal 2 blok (Senin-Rabu & Kamis-Sabtu) berdasarkan slot rotasi mingguan:
+ * - Slot 0 & 1 : Sen-Rab TENSI (3x)    | Kam-Sab LAPANGAN (3x)
+ * - Slot 2 & 3 : Sen-Rab IGD (3x)      | Kam-Sab LAPANGAN (3x)
+ * - Slot 4     : Sen-Rab POLI (3x)     | Kam-Sab LAPANGAN (3x)
+ * - Slot 5 & 6 : Sen-Rab LAPANGAN (3x) | Kam-Sab TENSI (3x)
+ * - Slot 7 & 8 : Sen-Rab LAPANGAN (3x) | Kam-Sab IGD (3x)
+ * - Slot 9     : Sen-Rab LAPANGAN (3x) | Kam-Sab POLI (3x)
+ * - Slot >= 10 : Sen-Rab LAPANGAN (3x) | Kam-Sab LAPANGAN (3x)
+ */
+function getBlockShiftsBySlot(
+  slotIndex: number
+): [Exclude<ShiftCode, 'LIBUR'>, Exclude<ShiftCode, 'LIBUR'>] {
+  if (slotIndex < 2) return ['TENSI', 'LAPANGAN'];
+  if (slotIndex < 4) return ['IGD', 'LAPANGAN'];
+  if (slotIndex === 4) return ['POLI', 'LAPANGAN'];
+  if (slotIndex < 7) return ['LAPANGAN', 'TENSI'];
+  if (slotIndex < 9) return ['LAPANGAN', 'IGD'];
+  if (slotIndex === 9) return ['LAPANGAN', 'POLI'];
+  return ['LAPANGAN', 'LAPANGAN'];
+}
+
+export function isInBuildingShift(shift: ShiftCode): boolean {
+  return (
+    shift === 'TENSI' || shift === 'IGD' || shift === 'POLI'
+  );
+}
 
 export function getMondayOfWeek(dateInput: Date | string): Date {
   const d =
@@ -104,9 +129,11 @@ function positiveMod(n: number, m: number): number {
 }
 
 /**
- * Generator jadwal dinas mingguan:
- * - Senin-Rabu (3 hari) & Kamis-Sabtu (3 hari) berotasi otomatis tiap minggu
- * - Minggu selalu LIBUR dan terkunci (isLocked = true)
+ * Generator utama jadwal dinas perawat Puskesmas:
+ * - Maksimal 3 hari berturut-turut jaga di unit yang sama (Tensi / IGD / Poli)
+ * - 3 hari sisanya bertugas di Lapangan (bukan libur)
+ * - Kuota harian Senin-Sabtu: 2 Tensi, 2 IGD, 1 Poli, sisanya Lapangan
+ * - Minggu: Semua perawat LIBUR dan terkunci (isLocked = true)
  */
 export function generateWeeklyRoster(
   staffList: StaffMember[],
@@ -115,18 +142,20 @@ export function generateWeeklyRoster(
   manualOverrides: Record<string, ShiftCode> = {}
 ): WeeklyRoster {
   const activeStaff = staffList.filter((s) => s.active);
+  const totalStaff = activeStaff.length;
   const weekStart = getMondayOfWeek(targetDate);
   const weekEnd = addDays(weekStart, 6);
   const weekOffset = calculateWeekOffset(weekStart, config.anchorDateISO);
 
   const rows: StaffWeeklyRow[] = activeStaff.map((staff, staffIdx) => {
-    // Setiap minggu seluruh personel bergeser pola rotasinya secara siklikal
-    const patternIndex = positiveMod(
-      staffIdx + weekOffset,
-      SHIFT_BLOCK_PATTERNS.length
-    );
+    const rotatedSlot =
+      totalStaff > 0 ? positiveMod(staffIdx + weekOffset, totalStaff) : 0;
+
     const [firstBlockShift, secondBlockShift] =
-      SHIFT_BLOCK_PATTERNS[patternIndex];
+      getBlockShiftsBySlot(rotatedSlot);
+
+    let inBuildingCount = 0;
+    let lapanganCount = 0;
 
     const days = Array.from({ length: 7 }, (_, dayIdx) => {
       const currentDate = addDays(weekStart, dayIdx);
@@ -143,17 +172,24 @@ export function generateWeeklyRoster(
         };
       }
 
-      // Senin-Rabu (0,1,2) = Blok 1 (3 hari) | Kamis-Sabtu (3,4,5) = Blok 2 (3 hari)
+      // Senin-Rabu (0,1,2) = Blok 1 | Kamis-Sabtu (3,4,5) = Blok 2
       const defaultShift: ShiftCode =
         dayIdx < 3 ? firstBlockShift : secondBlockShift;
 
       const overrideKey = `${staff.id}_${dateISO}`;
       const overriddenShift = manualOverrides[overrideKey];
+      const finalShift = overriddenShift ?? defaultShift;
+
+      if (isInBuildingShift(finalShift)) {
+        inBuildingCount++;
+      } else if (finalShift === 'LAPANGAN') {
+        lapanganCount++;
+      }
 
       return {
         dateISO,
         dayName: DAY_NAMES_ID[dayIdx],
-        shift: overriddenShift ?? defaultShift,
+        shift: finalShift,
         isOverridden: Boolean(overriddenShift),
         isLocked: false,
       };
@@ -161,12 +197,14 @@ export function generateWeeklyRoster(
 
     return {
       staff,
+      inBuildingCount,
+      lapanganCount,
       days,
     };
   });
 
   return {
-    weekNumber: positiveMod(weekOffset, SHIFT_BLOCK_PATTERNS.length) + 1,
+    weekNumber: totalStaff > 0 ? positiveMod(weekOffset, totalStaff) + 1 : 1,
     weekOffset,
     startDateISO: formatDateISO(weekStart),
     endDateISO: formatDateISO(weekEnd),
@@ -176,8 +214,10 @@ export function generateWeeklyRoster(
 
 export function exportRosterToCSV(roster: WeeklyRoster): string {
   const headers = [
-    'Nama Personel',
-    'Jabatan/Unit',
+    'Nama Perawat',
+    'Jabatan/Profesi',
+    'Jaga Dalam (Hari)',
+    'Lapangan (Hari)',
     ...DAY_NAMES_ID.map((day, i) => {
       const dateStr = roster.rows[0]?.days[i]?.dateISO ?? '';
       return `${day} (${dateStr})`;
@@ -187,6 +227,8 @@ export function exportRosterToCSV(roster: WeeklyRoster): string {
   const lines = roster.rows.map((row) => [
     `"${row.staff.name}"`,
     `"${row.staff.role}"`,
+    `${row.inBuildingCount} Hari`,
+    `${row.lapanganCount} Hari`,
     ...row.days.map((d) => d.shift),
   ]);
 
