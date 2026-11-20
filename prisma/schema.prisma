@@ -1,0 +1,45 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ShiftCode {
+  PAGI
+  SIANG
+  MALAM
+  LIBUR
+}
+
+model Staff {
+  id            String             @id @default(cuid())
+  name          String
+  role          String
+  rotationOrder Int                @default(0)
+  active        Boolean            @default(true)
+  overrides     ScheduleOverride[]
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+}
+
+model RotationSetting {
+  id             String   @id @default("default")
+  anchorDate     DateTime // Tanggal Senin patokan siklus ke-1
+  daysOffPerWeek Int      @default(1)
+  updatedAt      DateTime @updatedAt
+}
+
+model ScheduleOverride {
+  id        String    @id @default(cuid())
+  staffId   String
+  staff     Staff     @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  date      DateTime  @db.Date
+  shift     ShiftCode
+  note      String?
+  createdAt DateTime  @default(now())
+
+  @@unique([staffId, date])
+}
